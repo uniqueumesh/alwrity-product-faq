@@ -251,6 +251,40 @@ def faqs_to_jsonld(faqs, product_keywords):
     }
     return json.dumps(jsonld, indent=2)
 
+# --- Competitive Analysis: Display top competitors from SERP ---
+def extract_competitors_from_serp(serp_results):
+    competitors = []
+    if serp_results.get("organic"):
+        for item in serp_results["organic"][:5]:
+            competitors.append({
+                "title": item.get("title", ""),
+                "url": item.get("link", ""),
+                "snippet": item.get("snippet", "")
+            })
+    return competitors
+
+def display_competitor_table(competitors):
+    if competitors:
+        st.markdown('<h5 style="color:#1976D2;">Top Competitor Products from SERP</h5>', unsafe_allow_html=True)
+        import pandas as pd
+        df = pd.DataFrame(competitors)
+        df = df.rename(columns={"title": "Title", "url": "URL", "snippet": "Snippet"})
+        st.dataframe(df, use_container_width=True)
+
+# --- Basic Plagiarism Check: flag FAQs that appear verbatim in SERP ---
+def check_faq_uniqueness(faqs, serp_results):
+    """Returns a list of (faq_line, is_unique) tuples."""
+    serp_text = " ".join([
+        item.get("title", "") + " " + item.get("snippet", "")
+        for item in serp_results.get("organic", [])
+    ]).lower()
+    result = []
+    for line in faqs.split('\n'):
+        line_clean = line.strip().lower()
+        is_unique = line_clean not in serp_text
+        result.append((line, is_unique))
+    return result
+
 # --- Main App ---
 def main():
     st.set_page_config(
@@ -306,6 +340,7 @@ def main():
     serp_results, people_also_ask = get_serp_results(product_keywords, user_serper_api_key) if product_keywords else ({}, [])
     product_details = extract_product_details_from_url(product_url) if product_url else {}
     seo_keywords = extract_seo_keywords_from_serp(serp_results) if serp_results else []
+    competitors = extract_competitors_from_serp(serp_results)
     if product_keywords and (serp_results or people_also_ask):
         st.markdown('<h4 style="color:#1976D2;">🔎 SERP Research Results</h4>', unsafe_allow_html=True)
         if people_also_ask:
@@ -315,6 +350,8 @@ def main():
         if seo_keywords:
             st.markdown('**Top SEO Keywords from SERP:**')
             st.markdown(", ".join(seo_keywords))
+        if competitors:
+            display_competitor_table(competitors)
     if product_details:
         st.markdown('<h4 style="color:#1976D2;">📝 Product Details Extracted from URL</h4>', unsafe_allow_html=True)
         if product_details.get("title"):
@@ -377,7 +414,14 @@ def main():
     # --- Display results if available ---
     if st.session_state.get('faqs_ready') and st.session_state.get('product_faqs'):
         st.subheader('**🎉 Your Product FAQs! 🚀**')
-        st.markdown(st.session_state['product_faqs'])
+        # Plagiarism check
+        faq_lines = st.session_state['product_faqs'].split('\n')
+        uniqueness = check_faq_uniqueness(st.session_state['product_faqs'], serp_results)
+        for line, is_unique in uniqueness:
+            if is_unique or not line.strip():
+                st.markdown(line)
+            else:
+                st.markdown(f":red_circle: **Potential duplicate:** {line}")
         st.download_button("Copy All FAQs", st.session_state['product_faqs'], file_name="product_faqs.txt")
         st.download_button("Download FAQ Schema (JSON-LD)", st.session_state['jsonld'], file_name="faq_schema.json", mime="application/json")
         st.code(st.session_state['jsonld'], language="json")
