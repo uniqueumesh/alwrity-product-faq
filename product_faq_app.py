@@ -1,0 +1,165 @@
+import streamlit as st
+import os
+import json
+import requests
+from tenacity import retry, stop_after_attempt, wait_random_exponential
+import google.generativeai as genai
+from bs4 import BeautifulSoup
+
+# --- Helper functions ---
+def get_serp_results(product_keywords, user_serper_api_key=None):
+    try:
+        serp_results = perform_serperdev_google_search(product_keywords, user_serper_api_key)
+        people_also_ask = [item.get("question") for item in serp_results.get("peopleAlsoAsk", [])]
+        return serp_results, people_also_ask
+    except Exception as e:
+        st.warning(f"SERP research failed: {e}")
+        return {"peopleAlsoAsk": [], "relatedQuestions": [], "relatedSearches": []}, []
+
+def perform_serperdev_google_search(query, user_serper_api_key=None):
+    serper_api_key = user_serper_api_key or os.getenv('SERPER_API_KEY')
+    if not serper_api_key:
+        st.error("SERPER_API_KEY is missing. Set it in the .env file or provide it in the sidebar.")
+        return {"peopleAlsoAsk": [], "relatedQuestions": [], "relatedSearches": []}
+    url = "https://google.serper.dev/search"
+    payload = json.dumps({
+        "q": query,
+        "gl": "in",
+        "hl": "en",
+        "num": 10,
+        "autocorrect": True,
+        "page": 1,
+        "type": "search",
+        "engine": "google"
+    })
+    headers = {
+        'X-API-KEY': serper_api_key,
+        'Content-Type': 'application/json'
+    }
+    with st.spinner("Searching Google..."):
+        try:
+            response = requests.post(url, headers=headers, data=payload, stream=True)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                st.error(f"Error: {response.status_code}, {response.text}")
+                return {"peopleAlsoAsk": [], "relatedQuestions": [], "relatedSearches": []}
+        except Exception as e:
+            st.error(f"SERPER API request failed: {e}")
+            return {"peopleAlsoAsk": [], "relatedQuestions": [], "relatedSearches": []}
+
+@retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
+def generate_text_with_exception_handling(prompt, user_gemini_api_key=None):
+    try:
+        api_key = user_gemini_api_key or os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            st.error("GEMINI_API_KEY is missing. Please provide it in the sidebar or set it in the environment.")
+            return None
+        genai.configure(api_key=api_key)
+        generation_config = {
+            "temperature": 1,
+            "top_p": 0.95,
+            "top_k": 0,
+            "max_output_tokens": 8192,
+        }
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+        ]
+        model = genai.GenerativeModel(model_name="models/gemini-2.0-flash", generation_config=generation_config, safety_settings=safety_settings)
+        convo = model.start_chat(history=[])
+        convo.send_message(prompt)
+        return convo.last.text
+    except Exception as e:
+        st.exception(f"GEMINI: An unexpected error occurred: {e}")
+        return None
+
+def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_key, user_serper_api_key, product_url, serp_results, people_also_ask, faq_language):
+    prompt = f"""You are an expert e-commerce content writer. Generate 5 unique, concise FAQs (40–50 words each) for the product '{product_keywords}' on {ecommerce_platform}. Use the following SERP research and 'People Also Ask' data for inspiration. Write in {faq_language}. Format clearly for easy copy-paste.\nSERP: {serp_results}\nPeople Also Ask: {people_also_ask}\n"""
+    return generate_text_with_exception_handling(prompt, user_gemini_api_key)
+
+# --- Main App ---
+def main():
+    st.set_page_config(
+        page_title="ALwrity - AI Product FAQs Generator",
+        layout="wide",
+    )
+    st.markdown("""
+        <style>
+        ::-webkit-scrollbar-track { background: #e1ebf9; }
+        ::-webkit-scrollbar-thumb { background-color: #90CAF9; border-radius: 10px; border: 3px solid #e1ebf9; }
+        ::-webkit-scrollbar-thumb:hover { background: #64B5F6; }
+        ::-webkit-scrollbar { width: 16px; }
+        div.stButton > button:first-child {
+            background: #1565C0;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 2px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+            font-weight: bold;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<h1>🤖 ALwrity Product FAQs Generator</h1>', unsafe_allow_html=True)
+    st.markdown('<div style="color:#1976D2;font-size:1.2rem;margin-bottom:1.5rem;">Generate product FAQs for Amazon and other e-commerce platforms in seconds.</div>', unsafe_allow_html=True)
+
+    with st.expander("API Configuration 🔑", expanded=False):
+        user_gemini_api_key = st.text_input("Gemini API Key", type="password")
+        user_serper_api_key = st.text_input("SERPER API Key", type="password")
+
+    st.markdown('<h3>2️⃣ Enter Product Details</h3>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        product_keywords = st.text_input('🔑 Product Name/Keywords', placeholder="e.g., wireless earbuds, air fryer")
+        ecommerce_platform = st.selectbox('🛒 E-commerce Platform', ('Amazon', 'Flipkart', 'Walmart', 'Other'))
+        product_url = st.text_input('🔗 Product URL (optional)', placeholder="https://amazon.com/...")
+    with col2:
+        faq_language = st.selectbox('🌐 FAQ Output Language', options=["English", "Spanish", "French", "German", "Other"])
+        if faq_language == "Other":
+            faq_language = st.text_input("Specify Language", placeholder="e.g., Italian, Chinese")
+
+    serp_results, people_also_ask = get_serp_results(product_keywords, user_serper_api_key) if product_keywords else ({}, [])
+    if product_keywords and (serp_results or people_also_ask):
+        st.markdown('<h4 style="color:#1976D2;">🔎 SERP Research Results</h4>', unsafe_allow_html=True)
+        if people_also_ask:
+            st.markdown('**People Also Ask:**')
+            for idx, q in enumerate(people_also_ask, 1):
+                st.markdown(f"{idx}. {q}")
+
+    st.markdown('<h3>3️⃣ Generate Product FAQs</h3>', unsafe_allow_html=True)
+    if st.button('✨ Generate Product FAQs'):
+        with st.spinner("Generating your product FAQs..."):
+            if not product_keywords and not product_url:
+                st.error('Please enter product keywords or a product URL!')
+            else:
+                product_faqs = generate_product_faqs(
+                    product_keywords, ecommerce_platform, user_gemini_api_key,
+                    user_serper_api_key, product_url, serp_results, people_also_ask, faq_language
+                )
+                if product_faqs:
+                    st.subheader('**🎉 Your Product FAQs! 🚀**')
+                    st.markdown(product_faqs)
+                    st.download_button("Copy All FAQs", product_faqs, file_name="product_faqs.txt")
+                else:
+                    st.error("Could not generate FAQs. Please try again.")
+
+    with st.expander('❓ Help & Troubleshooting', expanded=False):
+        st.markdown('''
+        - **Not getting results?** Make sure you entered product keywords or a valid product URL.
+        - **API key issues?** Double-check your API keys or leave blank to use the default.
+        - **Still stuck?** [See our support & documentation](https://github.com/uniqueumesh/alwrity-faq)
+        ''')
+    st.markdown('<div class="footer">Made with ❤️ by ALwrity | <a href="https://github.com/uniqueumesh/alwrity-faq" style="color:#1976D2;">Support</a></div>', unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
