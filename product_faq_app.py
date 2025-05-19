@@ -5,6 +5,7 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 import google.generativeai as genai
 from bs4 import BeautifulSoup
+import datetime
 
 # --- Helper functions ---
 def get_serp_results(product_keywords, user_serper_api_key=None):
@@ -78,8 +79,8 @@ def generate_text_with_exception_handling(prompt, user_gemini_api_key=None):
 
 def extract_product_details_from_url(product_url):
     """
-    Scrape product title, features, and description from the product URL (basic version).
-    Returns a dict with keys: title, features, description.
+    Scrape product title, features, description, price, and rating from the product URL (enhanced version).
+    Returns a dict with keys: title, features, description, price, rating.
     """
     try:
         headers = {
@@ -89,12 +90,9 @@ def extract_product_details_from_url(product_url):
         if response.status_code != 200:
             return {}
         soup = BeautifulSoup(response.text, "html.parser")
-        # Try to extract title
         title = soup.find("title").get_text(strip=True) if soup.find("title") else ""
-        # Try to extract meta description
         desc_tag = soup.find("meta", attrs={"name": "description"})
         description = desc_tag["content"].strip() if desc_tag and desc_tag.has_attr("content") else ""
-        # Try to extract bullet features (Amazon/Flipkart style)
         features = []
         for ul in soup.find_all("ul"):
             for li in ul.find_all("li"):
@@ -103,10 +101,38 @@ def extract_product_details_from_url(product_url):
                     features.append(text)
             if features:
                 break
+        # Try to extract price (common patterns)
+        price = ""
+        price_selectors = [
+            {'name': 'span', 'attrs': {'id': 'priceblock_ourprice'}},
+            {'name': 'span', 'attrs': {'id': 'priceblock_dealprice'}},
+            {'name': 'span', 'attrs': {'class': 'a-price-whole'}},
+            {'name': 'span', 'attrs': {'class': 'price'}},
+            {'name': 'div', 'attrs': {'class': 'product-price'}},
+        ]
+        for sel in price_selectors:
+            tag = soup.find(sel['name'], attrs=sel['attrs'])
+            if tag:
+                price = tag.get_text(strip=True)
+                break
+        # Try to extract rating (common patterns)
+        rating = ""
+        rating_selectors = [
+            {'name': 'span', 'attrs': {'class': 'a-icon-alt'}},
+            {'name': 'span', 'attrs': {'class': 'reviewCountTextLinkedHistogram'}},
+            {'name': 'span', 'attrs': {'class': 'averageStarRating'}},
+        ]
+        for sel in rating_selectors:
+            tag = soup.find(sel['name'], attrs=sel['attrs'])
+            if tag:
+                rating = tag.get_text(strip=True)
+                break
         return {
             "title": title,
             "description": description,
-            "features": features
+            "features": features,
+            "price": price,
+            "rating": rating
         }
     except Exception as e:
         return {}
@@ -170,6 +196,10 @@ def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_
             details_section += "Features:\n"
             for feat in product_details["features"]:
                 details_section += f"- {feat}\n"
+        if product_details.get("price"):
+            details_section += f"Price: {product_details['price']}\n"
+        if product_details.get("rating"):
+            details_section += f"Rating: {product_details['rating']}\n"
     # Add tone, length, and SEO keywords to the prompt
     tone_section = f"\nTone/Style: {faq_tone}." if faq_tone and faq_tone != "Default" else ""
     length_section = ""
@@ -295,6 +325,10 @@ def main():
             st.markdown("**Features:**")
             for feat in product_details["features"]:
                 st.markdown(f"- {feat}")
+        if product_details.get("price"):
+            st.markdown(f"**Price:** {product_details['price']}")
+        if product_details.get("rating"):
+            st.markdown(f"**Rating:** {product_details['rating']}")
 
     st.markdown('<h3>3️⃣ Generate Product FAQs</h3>', unsafe_allow_html=True)
     if st.button('✨ Generate Product FAQs'):
@@ -314,8 +348,34 @@ def main():
                     jsonld = faqs_to_jsonld(product_faqs, product_keywords)
                     st.download_button("Download FAQ Schema (JSON-LD)", jsonld, file_name="faq_schema.json", mime="application/json")
                     st.code(jsonld, language="json")
-                else:
-                    st.error("Could not generate FAQs. Please try again.")
+                    # --- User Feedback Section ---
+                    st.markdown('---')
+                    st.markdown('### 🙏 Was this FAQ helpful?')
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        thumbs_up = st.button('👍 Yes', key='thumbs_up')
+                    with col_no:
+                        thumbs_down = st.button('👎 No', key='thumbs_down')
+                    feedback_text = st.text_input('Any comments or suggestions?', key='feedback_text')
+                    if thumbs_up or thumbs_down:
+                        feedback = {
+                            'timestamp': datetime.datetime.now().isoformat(),
+                            'product_keywords': product_keywords,
+                            'faqs': product_faqs,
+                            'helpful': bool(thumbs_up),
+                            'not_helpful': bool(thumbs_down),
+                            'comment': feedback_text
+                        }
+                        feedback_file = 'feedback.json'
+                        if os.path.exists(feedback_file):
+                            with open(feedback_file, 'r', encoding='utf-8') as f:
+                                all_feedback = json.load(f)
+                        else:
+                            all_feedback = []
+                        all_feedback.append(feedback)
+                        with open(feedback_file, 'w', encoding='utf-8') as f:
+                            json.dump(all_feedback, f, indent=2)
+                        st.success('Thank you for your feedback!')
 
     with st.expander('❓ Help & Troubleshooting', expanded=False):
         st.markdown('''
