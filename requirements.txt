@@ -1,0 +1,5 @@
+streamlit
+requests
+tenacity
+google-generativeai
+beautifulsoup4
