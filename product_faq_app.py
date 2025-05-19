@@ -76,9 +76,63 @@ def generate_text_with_exception_handling(prompt, user_gemini_api_key=None):
         st.exception(f"GEMINI: An unexpected error occurred: {e}")
         return None
 
-def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_key, user_serper_api_key, product_url, serp_results, people_also_ask, faq_language):
-    prompt = f"""You are an expert e-commerce content writer. Generate 5 unique, concise FAQs (40–50 words each) for the product '{product_keywords}' on {ecommerce_platform}. Use the following SERP research and 'People Also Ask' data for inspiration. Write in {faq_language}. Format clearly for easy copy-paste.\nSERP: {serp_results}\nPeople Also Ask: {people_also_ask}\n"""
+def format_serp_for_prompt(serp_results, people_also_ask):
+    serp_section = ""
+    if serp_results.get("organic"):
+        serp_section += "Top Organic Results:\n"
+        for idx, item in enumerate(serp_results["organic"][:5], 1):
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            serp_section += f"{idx}. {title}: {snippet}\n"
+    if serp_results.get("relatedSearches"):
+        serp_section += "\nRelated Searches:\n"
+        for s in serp_results["relatedSearches"]:
+            serp_section += f"- {s.get('query', '')}\n"
+    if people_also_ask:
+        serp_section += "\nPeople Also Ask:\n"
+        for q in people_also_ask:
+            serp_section += f"- {q}\n"
+    return serp_section.strip()
+
+def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_key, user_serper_api_key, product_url, serp_results, people_also_ask, faq_language, faq_count):
+    serp_prompt = format_serp_for_prompt(serp_results, people_also_ask)
+    prompt = (
+        f"You are an expert e-commerce content writer. Generate {faq_count} unique, concise FAQs (40–50 words each) "
+        f"for the product '{product_keywords}' on {ecommerce_platform}. Use the following SERP research for inspiration. "
+        f"Write in {faq_language}. Format as a numbered list for easy copy-paste.\n\n"
+        f"{serp_prompt}\n"
+    )
     return generate_text_with_exception_handling(prompt, user_gemini_api_key)
+
+def faqs_to_jsonld(faqs, product_keywords):
+    import re
+    qas = []
+    for line in faqs.split('\n'):
+        match = re.match(r"\d+\.\s*(.+?)\?\s*(.+)", line)
+        if match:
+            question, answer = match.groups()
+            qas.append({"question": question.strip() + "?", "answer": answer.strip()})
+    if not qas:
+        parts = faqs.split('?')
+        for i in range(0, len(parts)-1, 2):
+            question = parts[i].strip() + '?'
+            answer = parts[i+1].strip()
+            qas.append({"question": question, "answer": answer})
+    jsonld = {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": qa["question"],
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": qa["answer"]
+                }
+            } for qa in qas
+        ]
+    }
+    return json.dumps(jsonld, indent=2)
 
 # --- Main App ---
 def main():
@@ -123,6 +177,7 @@ def main():
         product_keywords = st.text_input('🔑 Product Name/Keywords', placeholder="e.g., wireless earbuds, air fryer")
         ecommerce_platform = st.selectbox('🛒 E-commerce Platform', ('Amazon', 'Flipkart', 'Walmart', 'Other'))
         product_url = st.text_input('🔗 Product URL (optional)', placeholder="https://amazon.com/...")
+        faq_count = st.slider('Number of FAQs', min_value=3, max_value=10, value=5)
     with col2:
         faq_language = st.selectbox('🌐 FAQ Output Language', options=["English", "Spanish", "French", "German", "Other"])
         if faq_language == "Other":
@@ -144,12 +199,15 @@ def main():
             else:
                 product_faqs = generate_product_faqs(
                     product_keywords, ecommerce_platform, user_gemini_api_key,
-                    user_serper_api_key, product_url, serp_results, people_also_ask, faq_language
+                    user_serper_api_key, product_url, serp_results, people_also_ask, faq_language, faq_count
                 )
                 if product_faqs:
                     st.subheader('**🎉 Your Product FAQs! 🚀**')
                     st.markdown(product_faqs)
                     st.download_button("Copy All FAQs", product_faqs, file_name="product_faqs.txt")
+                    jsonld = faqs_to_jsonld(product_faqs, product_keywords)
+                    st.download_button("Download FAQ Schema (JSON-LD)", jsonld, file_name="faq_schema.json", mime="application/json")
+                    st.code(jsonld, language="json")
                 else:
                     st.error("Could not generate FAQs. Please try again.")
 
