@@ -76,6 +76,41 @@ def generate_text_with_exception_handling(prompt, user_gemini_api_key=None):
         st.exception(f"GEMINI: An unexpected error occurred: {e}")
         return None
 
+def extract_product_details_from_url(product_url):
+    """
+    Scrape product title, features, and description from the product URL (basic version).
+    Returns a dict with keys: title, features, description.
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+        }
+        response = requests.get(product_url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return {}
+        soup = BeautifulSoup(response.text, "html.parser")
+        # Try to extract title
+        title = soup.find("title").get_text(strip=True) if soup.find("title") else ""
+        # Try to extract meta description
+        desc_tag = soup.find("meta", attrs={"name": "description"})
+        description = desc_tag["content"].strip() if desc_tag and desc_tag.has_attr("content") else ""
+        # Try to extract bullet features (Amazon/Flipkart style)
+        features = []
+        for ul in soup.find_all("ul"):
+            for li in ul.find_all("li"):
+                text = li.get_text(strip=True)
+                if text and len(text) > 25 and len(features) < 10:
+                    features.append(text)
+            if features:
+                break
+        return {
+            "title": title,
+            "description": description,
+            "features": features
+        }
+    except Exception as e:
+        return {}
+
 def format_serp_for_prompt(serp_results, people_also_ask):
     serp_section = ""
     if serp_results.get("organic"):
@@ -95,11 +130,25 @@ def format_serp_for_prompt(serp_results, people_also_ask):
     return serp_section.strip()
 
 def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_key, user_serper_api_key, product_url, serp_results, people_also_ask, faq_language, faq_count):
+    # Extract product details if URL is provided
+    product_details = extract_product_details_from_url(product_url) if product_url else {}
     serp_prompt = format_serp_for_prompt(serp_results, people_also_ask)
+    details_section = ""
+    if product_details:
+        details_section += "Product Details from URL:\n"
+        if product_details.get("title"):
+            details_section += f"Title: {product_details['title']}\n"
+        if product_details.get("description"):
+            details_section += f"Description: {product_details['description']}\n"
+        if product_details.get("features"):
+            details_section += "Features:\n"
+            for feat in product_details["features"]:
+                details_section += f"- {feat}\n"
     prompt = (
         f"You are an expert e-commerce content writer. Generate {faq_count} unique, concise FAQs (40–50 words each) "
-        f"for the product '{product_keywords}' on {ecommerce_platform}. Use the following SERP research for inspiration. "
+        f"for the product '{product_keywords}' on {ecommerce_platform}. Use the following SERP research and product details for inspiration. "
         f"Write in {faq_language}. Format as a numbered list for easy copy-paste.\n\n"
+        f"{details_section}\n"
         f"{serp_prompt}\n"
     )
     return generate_text_with_exception_handling(prompt, user_gemini_api_key)
@@ -184,12 +233,23 @@ def main():
             faq_language = st.text_input("Specify Language", placeholder="e.g., Italian, Chinese")
 
     serp_results, people_also_ask = get_serp_results(product_keywords, user_serper_api_key) if product_keywords else ({}, [])
+    product_details = extract_product_details_from_url(product_url) if product_url else {}
     if product_keywords and (serp_results or people_also_ask):
         st.markdown('<h4 style="color:#1976D2;">🔎 SERP Research Results</h4>', unsafe_allow_html=True)
         if people_also_ask:
             st.markdown('**People Also Ask:**')
             for idx, q in enumerate(people_also_ask, 1):
                 st.markdown(f"{idx}. {q}")
+    if product_details:
+        st.markdown('<h4 style="color:#1976D2;">📝 Product Details Extracted from URL</h4>', unsafe_allow_html=True)
+        if product_details.get("title"):
+            st.markdown(f"**Title:** {product_details['title']}")
+        if product_details.get("description"):
+            st.markdown(f"**Description:** {product_details['description']}")
+        if product_details.get("features"):
+            st.markdown("**Features:**")
+            for feat in product_details["features"]:
+                st.markdown(f"- {feat}")
 
     st.markdown('<h3>3️⃣ Generate Product FAQs</h3>', unsafe_allow_html=True)
     if st.button('✨ Generate Product FAQs'):
