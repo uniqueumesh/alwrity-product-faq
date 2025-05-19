@@ -330,6 +330,34 @@ def main():
         if product_details.get("rating"):
             st.markdown(f"**Rating:** {product_details['rating']}")
 
+    # --- Track input state for persistence ---
+    input_state = {
+        'product_keywords': product_keywords,
+        'ecommerce_platform': ecommerce_platform,
+        'product_url': product_url,
+        'faq_count': faq_count,
+        'faq_language': faq_language,
+        'faq_tone': faq_tone,
+        'faq_length': faq_length,
+        'include_seo_keywords': include_seo_keywords,
+        'seo_keywords': seo_keywords,
+    }
+    if 'last_input_state' not in st.session_state:
+        st.session_state['last_input_state'] = None
+    if 'product_faqs' not in st.session_state:
+        st.session_state['product_faqs'] = None
+    if 'jsonld' not in st.session_state:
+        st.session_state['jsonld'] = None
+    if 'faqs_ready' not in st.session_state:
+        st.session_state['faqs_ready'] = False
+
+    # Detect input changes to reset results
+    if st.session_state['last_input_state'] != input_state:
+        st.session_state['product_faqs'] = None
+        st.session_state['jsonld'] = None
+        st.session_state['faqs_ready'] = False
+        st.session_state['last_input_state'] = input_state.copy()
+
     st.markdown('<h3>3️⃣ Generate Product FAQs</h3>', unsafe_allow_html=True)
     if st.button('✨ Generate Product FAQs'):
         with st.spinner("Generating your product FAQs..."):
@@ -342,40 +370,45 @@ def main():
                     faq_tone, faq_length, include_seo_keywords, seo_keywords
                 )
                 if product_faqs:
-                    st.subheader('**🎉 Your Product FAQs! 🚀**')
-                    st.markdown(product_faqs)
-                    st.download_button("Copy All FAQs", product_faqs, file_name="product_faqs.txt")
-                    jsonld = faqs_to_jsonld(product_faqs, product_keywords)
-                    st.download_button("Download FAQ Schema (JSON-LD)", jsonld, file_name="faq_schema.json", mime="application/json")
-                    st.code(jsonld, language="json")
-                    # --- User Feedback Section ---
-                    st.markdown('---')
-                    st.markdown('### 🙏 Was this FAQ helpful?')
-                    col_yes, col_no = st.columns(2)
-                    with col_yes:
-                        thumbs_up = st.button('👍 Yes', key='thumbs_up')
-                    with col_no:
-                        thumbs_down = st.button('👎 No', key='thumbs_down')
-                    feedback_text = st.text_input('Any comments or suggestions?', key='feedback_text')
-                    if thumbs_up or thumbs_down:
-                        feedback = {
-                            'timestamp': datetime.datetime.now().isoformat(),
-                            'product_keywords': product_keywords,
-                            'faqs': product_faqs,
-                            'helpful': bool(thumbs_up),
-                            'not_helpful': bool(thumbs_down),
-                            'comment': feedback_text
-                        }
-                        feedback_file = 'feedback.json'
-                        if os.path.exists(feedback_file):
-                            with open(feedback_file, 'r', encoding='utf-8') as f:
-                                all_feedback = json.load(f)
-                        else:
-                            all_feedback = []
-                        all_feedback.append(feedback)
-                        with open(feedback_file, 'w', encoding='utf-8') as f:
-                            json.dump(all_feedback, f, indent=2)
-                        st.success('Thank you for your feedback!')
+                    st.session_state['product_faqs'] = product_faqs
+                    st.session_state['jsonld'] = faqs_to_jsonld(product_faqs, product_keywords)
+                    st.session_state['faqs_ready'] = True
+
+    # --- Display results if available ---
+    if st.session_state.get('faqs_ready') and st.session_state.get('product_faqs'):
+        st.subheader('**🎉 Your Product FAQs! 🚀**')
+        st.markdown(st.session_state['product_faqs'])
+        st.download_button("Copy All FAQs", st.session_state['product_faqs'], file_name="product_faqs.txt")
+        st.download_button("Download FAQ Schema (JSON-LD)", st.session_state['jsonld'], file_name="faq_schema.json", mime="application/json")
+        st.code(st.session_state['jsonld'], language="json")
+        # --- User Feedback Section ---
+        st.markdown('---')
+        st.markdown('### 🙏 Was this FAQ helpful?')
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            thumbs_up = st.button('👍 Yes', key='thumbs_up')
+        with col_no:
+            thumbs_down = st.button('👎 No', key='thumbs_down')
+        feedback_text = st.text_input('Any comments or suggestions?', key='feedback_text')
+        if thumbs_up or thumbs_down:
+            feedback = {
+                'timestamp': datetime.datetime.now().isoformat(),
+                'product_keywords': product_keywords,
+                'faqs': st.session_state['product_faqs'],
+                'helpful': bool(thumbs_up),
+                'not_helpful': bool(thumbs_down),
+                'comment': feedback_text
+            }
+            feedback_file = 'feedback.json'
+            if os.path.exists(feedback_file):
+                with open(feedback_file, 'r', encoding='utf-8') as f:
+                    all_feedback = json.load(f)
+            else:
+                all_feedback = []
+            all_feedback.append(feedback)
+            with open(feedback_file, 'w', encoding='utf-8') as f:
+                json.dump(all_feedback, f, indent=2)
+            st.success('Thank you for your feedback!')
 
     with st.expander('❓ Help & Troubleshooting', expanded=False):
         st.markdown('''
