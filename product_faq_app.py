@@ -129,8 +129,34 @@ def format_serp_for_prompt(serp_results, people_also_ask):
             serp_section += f"- {q}\n"
     return serp_section.strip()
 
-def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_key, user_serper_api_key, product_url, serp_results, people_also_ask, faq_language, faq_count):
-    # Extract product details if URL is provided
+def extract_seo_keywords_from_serp(serp_results):
+    """
+    Extracts top keywords from SERP organic results and related searches.
+    Returns a list of keywords/phrases.
+    """
+    keywords = set()
+    # Extract from organic titles and snippets
+    if serp_results.get("organic"):
+        for item in serp_results["organic"]:
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            for word in title.split():
+                if len(word) > 3:
+                    keywords.add(word.lower())
+            for word in snippet.split():
+                if len(word) > 3:
+                    keywords.add(word.lower())
+    # Extract from related searches
+    if serp_results.get("relatedSearches"):
+        for s in serp_results["relatedSearches"]:
+            query = s.get("query", "")
+            for word in query.split():
+                if len(word) > 3:
+                    keywords.add(word.lower())
+    # Return top 15 unique keywords/phrases
+    return list(keywords)[:15]
+
+def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_key, user_serper_api_key, product_url, serp_results, people_also_ask, faq_language, faq_count, faq_tone="Default", faq_length="Default", include_seo_keywords=True, seo_keywords=None):
     product_details = extract_product_details_from_url(product_url) if product_url else {}
     serp_prompt = format_serp_for_prompt(serp_results, people_also_ask)
     details_section = ""
@@ -144,10 +170,22 @@ def generate_product_faqs(product_keywords, ecommerce_platform, user_gemini_api_
             details_section += "Features:\n"
             for feat in product_details["features"]:
                 details_section += f"- {feat}\n"
+    # Add tone, length, and SEO keywords to the prompt
+    tone_section = f"\nTone/Style: {faq_tone}." if faq_tone and faq_tone != "Default" else ""
+    length_section = ""
+    if faq_length == "Short (20-30 words)":
+        length_section = "\nEach answer should be 20-30 words."
+    elif faq_length == "Medium (40-50 words)":
+        length_section = "\nEach answer should be 40-50 words."
+    elif faq_length == "Long (60+ words)":
+        length_section = "\nEach answer should be at least 60 words."
+    seo_section = ""
+    if include_seo_keywords and seo_keywords:
+        seo_section = f"\nIncorporate these SEO keywords naturally: {', '.join(seo_keywords)}."
     prompt = (
-        f"You are an expert e-commerce content writer. Generate {faq_count} unique, concise FAQs (40–50 words each) "
-        f"for the product '{product_keywords}' on {ecommerce_platform}. Use the following SERP research and product details for inspiration. "
-        f"Write in {faq_language}. Format as a numbered list for easy copy-paste.\n\n"
+        f"You are an expert e-commerce content writer. Generate {faq_count} unique, concise FAQs for the product '{product_keywords}' on {ecommerce_platform}. "
+        f"Use the following SERP research and product details for inspiration. Write in {faq_language}. Format as a numbered list for easy copy-paste."
+        f"{tone_section}{length_section}{seo_section}\n\n"
         f"{details_section}\n"
         f"{serp_prompt}\n"
     )
@@ -231,15 +269,22 @@ def main():
         faq_language = st.selectbox('🌐 FAQ Output Language', options=["English", "Spanish", "French", "German", "Other"])
         if faq_language == "Other":
             faq_language = st.text_input("Specify Language", placeholder="e.g., Italian, Chinese")
+        faq_tone = st.selectbox('🎨 FAQ Tone/Style', options=["Default", "Professional", "Casual", "Persuasive", "Informative"])
+        faq_length = st.selectbox('📏 FAQ Length', options=["Default", "Short (20-30 words)", "Medium (40-50 words)", "Long (60+ words)"])
+        include_seo_keywords = st.checkbox('Include SEO Keywords', value=True)
 
     serp_results, people_also_ask = get_serp_results(product_keywords, user_serper_api_key) if product_keywords else ({}, [])
     product_details = extract_product_details_from_url(product_url) if product_url else {}
+    seo_keywords = extract_seo_keywords_from_serp(serp_results) if serp_results else []
     if product_keywords and (serp_results or people_also_ask):
         st.markdown('<h4 style="color:#1976D2;">🔎 SERP Research Results</h4>', unsafe_allow_html=True)
         if people_also_ask:
             st.markdown('**People Also Ask:**')
             for idx, q in enumerate(people_also_ask, 1):
                 st.markdown(f"{idx}. {q}")
+        if seo_keywords:
+            st.markdown('**Top SEO Keywords from SERP:**')
+            st.markdown(", ".join(seo_keywords))
     if product_details:
         st.markdown('<h4 style="color:#1976D2;">📝 Product Details Extracted from URL</h4>', unsafe_allow_html=True)
         if product_details.get("title"):
@@ -259,7 +304,8 @@ def main():
             else:
                 product_faqs = generate_product_faqs(
                     product_keywords, ecommerce_platform, user_gemini_api_key,
-                    user_serper_api_key, product_url, serp_results, people_also_ask, faq_language, faq_count
+                    user_serper_api_key, product_url, serp_results, people_also_ask, faq_language, faq_count,
+                    faq_tone, faq_length, include_seo_keywords, seo_keywords
                 )
                 if product_faqs:
                     st.subheader('**🎉 Your Product FAQs! 🚀**')
